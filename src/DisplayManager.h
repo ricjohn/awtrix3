@@ -74,7 +74,7 @@ public:
     void sendAppLoop();
     void processDrawInstructions(int16_t x, int16_t y, String &drawInstructions);
 #ifdef ESP8266
-    void compileDrawInstructions(JsonVariant draw, DrawCommands &out);
+    bool compileDrawInstructions(JsonVariant draw, DrawCommands &out);
     void processDrawInstructions(int16_t x, int16_t y, const DrawCommands &commands);
 #endif
     String ledsAsJson();

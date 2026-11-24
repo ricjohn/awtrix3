@@ -647,7 +647,8 @@ bool DisplayManager_::generateCustomPage(const String &name, JsonObject doc, boo
   if (doc.containsKey("draw"))
   {
 #ifdef ESP8266
-    compileDrawInstructions(doc["draw"], customApp.drawInstructions);
+    if (!compileDrawInstructions(doc["draw"], customApp.drawInstructions))
+      return false; // no memory for the drawing: the app stays as it was
 #else
     customApp.drawInstructions = doc["draw"].as<String>();
 #endif
@@ -797,6 +798,11 @@ bool DisplayManager_::generateCustomPage(const String &name, JsonObject doc, boo
   doc.clear();
   pushCustomApp(name, pos - 1);
   customApps[name] = customApp;
+#ifdef ESP8266
+  // The copy into customApps can run out of memory for the drawing too: report it
+  if (customApps[name].drawInstructions.length() != customApp.drawInstructions.length())
+    return false;
+#endif
 
   return true;
 }
@@ -855,7 +861,8 @@ bool DisplayManager_::generateNotification(uint8_t source, const char *json)
   if (doc.containsKey("draw"))
   {
 #ifdef ESP8266
-    compileDrawInstructions(doc["draw"], newNotification.drawInstructions);
+    if (!compileDrawInstructions(doc["draw"], newNotification.drawInstructions))
+      return false; // no memory for the drawing
 #else
     newNotification.drawInstructions = doc["draw"].as<String>();
 #endif
@@ -1092,6 +1099,16 @@ bool DisplayManager_::generateNotification(uint8_t source, const char *json)
       notifications[0] = newNotification;
     }
   }
+#ifdef ESP8266
+  // The copy into the queue can run out of memory for the drawing too: then drop the
+  // notification and report it instead of showing it without its drawing
+  if (stack ? notifications.back().drawInstructions.length() != newNotification.drawInstructions.length()
+            : notifications[0].drawInstructions.length() != newNotification.drawInstructions.length())
+  {
+    notifications.erase(stack ? notifications.end() - 1 : notifications.begin());
+    return false;
+  }
+#endif
 
   doc.clear();
   return true;
@@ -2977,22 +2994,30 @@ namespace
   }
 }
 
-void DisplayManager_::compileDrawInstructions(JsonVariant draw, DrawCommands &out)
+// Returns false when there was no memory for the list (the caller reports an error then;
+// it used to be dropped quietly and the notification showed up empty)
+bool DisplayManager_::compileDrawInstructions(JsonVariant draw, DrawCommands &out)
 {
   out.bytes = String();
   JsonArray instructions = draw.as<JsonArray>();
   if (instructions.isNull())
-    return;
+    return true;
   DrawWriter counter;
   writeDrawCommands(instructions, counter);
+  if (counter.size == 0)
+    return true; // nothing to draw
   // one allocation of the exact size, then append
-  if (counter.size == 0 || !out.bytes.reserve(counter.size))
-    return; // nothing to draw, or out of memory: nothing is drawn
+  if (!out.bytes.reserve(counter.size))
+    return false;
   DrawWriter writer;
   writer.out = &out.bytes;
   writeDrawCommands(instructions, writer);
   if (!writer.ok || out.bytes.length() != counter.size)
+  {
     out.bytes = String();
+    return false;
+  }
+  return true;
 }
 
 void DisplayManager_::processDrawInstructions(int16_t xOffset, int16_t yOffset, const DrawCommands &commands)
